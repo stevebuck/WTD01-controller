@@ -108,13 +108,19 @@ private Map parseIasMessage(String description) {
 
   Map resultMap = [:]
   switch(msgCode) {
-    case '0x0038': // Dry
+    case '0x0000': // Continued moisture
+      log.debug 'Still detecting moisture'
+      resultMap["moisture"] = [name: "moisture", value: "flood"]
+      resultMap["tamperSwitch"] = getContactResult("closed")
+      break
+
+	case '0x0031': // Dry
       log.debug 'Detected Dry'
       resultMap["moisture"] = [name: "moisture", value: "dry"]
       resultMap["tamperSwitch"] = getContactResult("closed")
       break
 
-    case '0x0039': // Wet
+    case '0x0030': // Wet
       log.debug 'Detected Moisture'
       resultMap["moisture"] = [name: "moisture", value: "flood"]
       resultMap["tamperSwitch"] = getContactResult("closed")
