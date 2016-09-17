@@ -12,6 +12,9 @@
  *  on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
  *  for the specific language governing permissions and limitations under the License.
  *
+ *  TODO:
+ *   1. Battery status values
+ *   2. Improved tile layout: battery status icon and refresh tiles
  */
 metadata {
   definition (name: "Securifi Flood Sensor", namespace: "softwarily", author: "Steve Buck") {
@@ -30,10 +33,10 @@ metadata {
 
   tiles {
     tiles(scale: 2) {
-      multiAttributeTile(name:"flood", type: "generic", width: 6, height: 4) {
-        tileAttribute ("device.flood", key: "PRIMARY_CONTROL") {
-          attributeState "dry", label: "Dry", icon:"st.alarm.water.dry", backgroundColor:"#ffffff"
-          attributeState "flood", label: "Wet", icon:"st.alarm.water.wet", backgroundColor:"#53a7c0"
+      multiAttributeTile(name:"floodSensor", type: "device.floodSensor", width: 6, height: 4) {
+        tileAttribute ("device.floodSensor", key: "PRIMARY_CONTROL") {
+          attributeState "dry", label: '${name}', icon:"st.alarm.water.dry", backgroundColor:"#ffffff"
+          attributeState "wet", label: '${name}', icon:"st.alarm.water.wet", backgroundColor:"#53a7c0"
         }
       }
     }
@@ -43,17 +46,17 @@ metadata {
       state("closed", label:'${name}', icon:"st.contact.contact.closed", backgroundColor:"#79b821")
     }
 
-    main (["flood"])
-    details(["flood","tamperSwitch"])
+    main (["floodSensor"])
+    details(["floodSensor","tamperSwitch"])
   }
 }
 
 def configure() {
-  log.debug("** PIR02 ** configure called for device with network ID ${device.deviceNetworkId}")
+  log.trace("** PIR02 ** configure called for device with network ID ${device.deviceNetworkId}")
 
   // Switch endian
   String zigbeeId = String.reverse(device.hub.zigbeeId)
-  log.debug "Configuring Reporting, IAS CIE, and Bindings."
+  log.trace "Configuring Reporting, IAS CIE, and Bindings."
   def configCmds = [
     "zcl global write 0x500 0x10 0xf0 {${zigbeeId}}", "delay 200",
     "send 0x${device.deviceNetworkId} 1 1", "delay 1500",
@@ -68,7 +71,7 @@ def configure() {
 }
 
 def enrollResponse() {
-  log.debug "Sending enroll response"
+  log.trace "Sending enroll response"
   [
     "raw 0x500 {01 23 00 00 00}", "delay 200",
     "send 0x${device.deviceNetworkId} 1 1"
@@ -77,7 +80,7 @@ def enrollResponse() {
 
 // Parse incoming device messages to generate events
 def parse(String description) {
-  log.debug("** PIR02 parse received ** ${description}")
+  log.trace("** PIR02 parse received ** ${description}")
   def result = []
   Map map = [:]
 
@@ -85,7 +88,7 @@ def parse(String description) {
     map = parseIasMessage(description)
   }
 
-  log.debug "Parse returned $map"
+  log.trace "Parse returned $map"
   map.each { k, v ->
     log.debug "sending event ${v}"
     sendEvent v
@@ -105,47 +108,35 @@ def parse(String description) {
 private Map parseIasMessage(String description) {
   List parsedMsg = description.split(' ')
   String msgCode = parsedMsg[2]
-
+  
   Map resultMap = [:]
   switch(msgCode) {
-    case '0x0000': // Continued moisture
-      log.debug 'Still detecting moisture'
-      resultMap["moisture"] = [name: "moisture", value: "flood"]
-      resultMap["tamperSwitch"] = getContactResult("closed")
+	case '0x0030': // Dry
+      log.trace 'Detected dry'
+      resultMap["moisture"] = getFloodSensorResult 'dry'
+      resultMap["tamperSwitch"] = getContactResult 'closed'
       break
 
-	case '0x0031': // Dry
-      log.debug 'Detected Dry'
-      resultMap["moisture"] = [name: "moisture", value: "dry"]
-      resultMap["tamperSwitch"] = getContactResult("closed")
-      break
-
-    case '0x0030': // Wet
-      log.debug 'Detected Moisture'
-      resultMap["moisture"] = [name: "moisture", value: "flood"]
-      resultMap["tamperSwitch"] = getContactResult("closed")
-      break
-
-    case '0x0032': // Tamper Alarm
-      log.debug 'Detected Tamper'
-      resultMap["moisture"] = [name: "moisture", value: "active"]
-      resultMap["tamperSwitch"] = getContactResult("open")
+    case '0x0031': // Wet
+      log.trace 'Detected moisture'
+      resultMap["moisture"] = getFloodSensorResult 'wet'
+      resultMap["tamperSwitch"] = getContactResult 'closed'
       break
 
     case '0x0034': // Supervision Report
-      log.debug 'No flood with tamper alarm'
-      resultMap["moisture"] = [name: "moisture", value: "inactive"]
-      resultMap["tamperSwitch"] = getContactResult("open")
+      log.trace 'Detected tamper, no moisture'
+      resultMap["moisture"] = getFloodSensorResult 'dry'
+      resultMap["tamperSwitch"] = getContactResult 'open'
       break
 
     case '0x0035': // Restore Report
-      log.debug 'Moisture with tamper alarm'
-      resultMap["moisture"] = [name: "moisture", value: "active"]
-      resultMap["tamperSwitch"] = getContactResult("open")
+      log.trace 'Detected moisture and tamper'
+      resultMap["moisture"] = getFloodSensorResult 'wet'
+      resultMap["tamperSwitch"] = getContactResult 'open'
       break
 
-    case '0x0036': // Trouble/Failure
-      log.debug 'msgCode 36 not handled yet'
+	default:
+      log.warn "Unknown signal: ${msgCode}"
       break
   }
 
@@ -153,11 +144,19 @@ private Map parseIasMessage(String description) {
 }
 
 private Map getContactResult(value) {
-  log.debug "Tamper Switch Status ${value}"
+  log.debug "Tamper Switch Status: ${value}"
   def linkText = getLinkText(device)
   def descriptionText = "${linkText} was ${value == 'open' ? 'opened' : 'closed'}"
 
   return [name: 'tamperSwitch', value: value, descriptionText: descriptionText]
+}
+
+private Map getFloodSensorResult(value) {
+	log.debug "Flood Sensor Status: ${value}"
+    def linkText = getLinkText(device)
+    def descriptionText = "${linkText} was ${value == 'wet'? 'flooded': 'dry'}"
+    
+    return [name: 'floodSensor', value: value, descriptionText: descriptionText]
 }
 
 private hex(value) {
